@@ -42,22 +42,39 @@ public class IngestHandler implements Runnable {
         return text;
     }
 
-    private String runCommand(Path path) {
-        String command = String.format(commandFormat, path.toAbsolutePath().toString());
+    private class ProcessResult {
+	    int exitStatus;
+	    String stdout;
+	    String stderr;
+
+	    ProcessResult(int exitStatus, String stdout, String stderr) {
+		    this.exitStatus = exitStatus;
+		    this.stdout = stdout;
+		    this.stderr = stderr;
+	    }
+
+	    public String toString() {
+		    return String.format("[%d] [stdout] %s, [stderr] %s", exitStatus, stdout, stderr);
+	    }
+    }
+
+    private ProcessResult runCommand(Path path) {
+	    String errorMessage;
         try {
-            Process p = Runtime.getRuntime().exec(command.split("\\s+"));
-            int exitValue = p.waitFor();
-            if ( exitValue != 0 ) {
-                logger.warn("ansible ingest process failed {}", exitValue);
-            }
-            return String.format("[stdout] %s [stderr] %s",
-                    readInputStream(p.getInputStream()),
-                    readInputStream(p.getErrorStream())
+	    ProcessBuilder pb = new ProcessBuilder("argot", "ingest", "-s", solrUrl, path.toAbsolutePath().toString());
+	    logger.info("Command: {}", pb.command());
+            Process p = pb.start();
+            int exitStatus = p.waitFor();
+            return new ProcessResult(
+			    exitStatus,
+                    	    readInputStream(p.getInputStream()),
+                            readInputStream(p.getErrorStream())
             );
         } catch( Exception e ) {
+	    errorMessage = e.getMessage();
             logger.error("Error running ansible ingest process", e);
         }
-        return "<no output available>";
+        return new ProcessResult(-1, errorMessage, "");
     }
 
     @Override
@@ -65,13 +82,14 @@ public class IngestHandler implements Runnable {
         while( !Thread.currentThread().isInterrupted() ) {
             try {
                 Optional<Path> p = queue.take();
-                if ( p.isEmpty() ) {
+                if ( !p.isPresent() ) {
                     logger.info("Got shutdown signal");
                     break;
                 }
                 int count = processCount.incrementAndGet();
                 logger.info("[{}] Received {}", count, p);
-                Thread.sleep(2600);
+		ProcessResult result = runCommand(p.get());
+		logger.info("[{}] result: {}", count, result);
                 try {
                     Files.delete(p.get());
                 } catch(IOException iox) {

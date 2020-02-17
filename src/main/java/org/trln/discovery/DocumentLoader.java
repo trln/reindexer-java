@@ -45,6 +45,8 @@ public class DocumentLoader {
             dataSource.setDatabaseName(config.getName());
             dataSource.setUser(config.getUser());
             dataSource.setPassword(config.getPassword());
+	    dataSource.setReadOnly(true);
+	    dataSource.setDefaultRowFetchSize(250);
             return dataSource;
         }
 
@@ -53,11 +55,12 @@ public class DocumentLoader {
             private Writer writer;
             Output() {
                 try {
-                    path = Files.createTempFile("argot-", ".json'");
+                    path = Files.createTempFile("argot-", ".json");
                     DocumentLoader.this.logger.debug("Creating new tempfile at {}", path);
                     writer = new OutputStreamWriter(Files.newOutputStream(path), StandardCharsets.UTF_8);
                 } catch( IOException iox ) {
                     DocumentLoader.this.logger.fatal("Unable to create temp file", iox);
+		    throw new RuntimeException(iox);
                 }
             }
 
@@ -82,7 +85,9 @@ public class DocumentLoader {
         }
 
         private Connection getConnection() throws SQLException {
-            return dataSource.getConnection();
+            Connection conn = dataSource.getConnection();
+	    conn.setAutoCommit(false);
+	    return conn;
         }
 
         private void close() {
@@ -91,7 +96,8 @@ public class DocumentLoader {
             }
             try {
                 output.close();
-                pathQueue.add(Optional.empty());
+		logger.info("Adding {} to file queue for ingest", output.path);
+                pathQueue.put(Optional.of(output.getPath()));
             } catch( Exception iox ) {
                 logger.warn("Unable to close output file {}", output.path, iox);
             } finally {
@@ -107,29 +113,39 @@ public class DocumentLoader {
 
             int position = counter.incrementAndGet();
             if ( position % config.getChunkSize() == 0 ) {
+		logger.info("Completed chunk.  Closing file");
                 close();
             }
         }
 
         public void run() {
+	    logger.info("run() were called");
+	    int count = 0;
             try (Connection conn = getConnection()) {
                 try (Statement stmt = conn.createStatement()) {
-                    try (ResultSet rs = stmt.executeQuery("select foo from bar")) {
-                        rs.setFetchSize(250);
-                        rs.setFetchDirection(ResultSet.TYPE_FORWARD_ONLY);
+		    stmt.setFetchSize(250);
+		    logger.info("Executing primary query {}", config.getQuery());
+                    try (ResultSet rs = stmt.executeQuery(config.getQuery()) ) {
+			logger.info("Query executed.  Processing");
                         while (rs.next()) {
+			    count++;
                             Document doc = new Document();
                             doc.setId(rs.getString("id"));
                             doc.setOwner(rs.getString("owner"));
                             doc.setContent(rs.getString("content"));
+			    if ( count % 5000 == 0 ) {
+				    logger.info("Total documents: {}", count);
+			    }
                             processDocument(doc);
                         }
                     }
-                    close();
+		    logger.info("Processed {} documents in total", count);
                 }
             } catch (SQLException sqx) {
                 logger.fatal("Error reading from database", sqx);
                 System.exit(1);
-            }
+            } finally {
+		close();
+	    }
         }
 }

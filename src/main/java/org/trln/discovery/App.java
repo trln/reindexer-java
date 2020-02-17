@@ -34,10 +34,15 @@ public class App {
 
     public static void main(String[] args) throws Exception {
         Config config = loadConfig();
+	logger.info("Using solr {}", config.getSolrUrl());
+	logger.info("Chunk size {}", config.getChunkSize());
         ExecutorService service =  Executors.newFixedThreadPool(config.getWorkers());
-        BlockingQueue<Optional<Path>> pathQueue = new ArrayBlockingQueue<>(20);
+
+	int queueSize = (int)Math.round(config.getWorkers() * 1.5);
+        BlockingQueue<Optional<Path>> pathQueue = new ArrayBlockingQueue<>(queueSize);
+	logger.info("File queue holds {}", pathQueue.size());
         List<Future> workers = new ArrayList<>();
-        logger.info("Creating {} workers to process argot ingest commands", workers.size());
+        logger.info("Creating {} workers to process argot ingest commands", config.getWorkers());
         for( int i = 0, n = config.getWorkers(); i< n; i++ ) {
             logger.info("Adding handler {}", i+1);
             workers.add(service.submit(new IngestHandler(pathQueue, config.getSolrUrl())));
